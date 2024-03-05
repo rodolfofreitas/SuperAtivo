@@ -4,24 +4,32 @@ import pyautogui
 import sys
 import argparse
 import logging
-import psutil  # Para monitorar o uso da CPU
+import psutil
 from PyQt5.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QInputDialog
 from PyQt5.QtGui import QIcon
 
 # Configurar o logger
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-def manter_acordado(intervalo):
+# Variáveis globais
+start_time = time.time()
+ativo = True
+args = None
+
+def manter_acordado(intervalo, args):
     """
     Função para manter o computador acordado simulando o pressionamento de tecla.
 
     Argumentos:
         intervalo (int): Intervalo em segundos entre os pressionamentos de tecla.
+        args (Namespace): Argumentos da linha de comando.
     """
+    global start_time
     try:
         while True:
             # Simular pressionamento da tecla F15
             pyautogui.press('f15')
+            #print("Pressionando F15...")
             time.sleep(intervalo)
 
             # Desativar se uso da CPU estiver alto
@@ -47,7 +55,7 @@ def alternar_estado():
         ativo = not ativo
         if ativo:
             tray_icon.setIcon(QIcon("active_icon.png"))
-            thread = threading.Thread(target=manter_acordado, args=(intervalo,))
+            thread = threading.Thread(target=manter_acordado, args=(intervalo, args))
             thread.daemon = True
             thread.start()
         else:
@@ -61,6 +69,7 @@ def definir_tempo_ativacao():
     """
     Função para definir o tempo de ativação do programa através de uma caixa de diálogo.
     """
+    global start_time
     try:
         tempo_ativacao, ok = QInputDialog.getInt(None, "Tempo de Ativação", "Definir tempo de ativação (em segundos):", 59, 0)
         if ok:
@@ -82,7 +91,7 @@ def definir_tempo_uso():
             logging.info(f"Tempo de uso definido para {tempo_uso} segundos.")
     except Exception as e:
         logging.error(f"Erro ao definir tempo de uso: {e}")
-    
+
 try:
     # Inicialização do aplicativo e configuração da bandeja do sistema e ícones
     app = QApplication(sys.argv)
@@ -102,9 +111,6 @@ try:
     action_exit.triggered.connect(app.quit)
     tray_icon.setContextMenu(menu)
 
-    # Variável para controlar o estado ativo/inativo do programa
-    ativo = True
-
     # Processar argumentos da linha de comando
     args = argparse.Namespace(xx=59, tempo=None, cpu=None, tempo_uso=None)  # Argumentos padrão
 
@@ -116,7 +122,7 @@ try:
 
     # Thread para manter o computador acordado
     intervalo = args.xx
-    thread = threading.Thread(target=manter_acordado, args=(intervalo,))
+    thread = threading.Thread(target=manter_acordado, args=(intervalo, args))
     thread.daemon = True
 
     # Executar o aplicativo
