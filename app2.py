@@ -6,30 +6,55 @@ import argparse
 import logging
 from PyQt5.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QInputDialog
 from PyQt5.QtGui import QIcon
+from logging.handlers import TimedRotatingFileHandler
+
+# Configura o TimedRotatingFileHandler para rotacionar diariamente
+handler = TimedRotatingFileHandler('activity_log.log', when='midnight', interval=1, backupCount=1)
+handler.setLevel(logging.INFO)
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+handler.setFormatter(formatter)
+
+# Adiciona o handler ao logger
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+logger.addHandler(handler)
+
 
 class AutoPresser:
-    def __init__(self, interval=30):
+    def __init__(self, interval):
         self.interval = interval
         self.active = True
         self.thread = None
         self.start_time = time.time()
+        self.toggle_active(True)
 
     def press_key(self):
-        while self.active:
-            pyautogui.press('f15')
-            logging.info("Tecla F15 pressionada.")
+        while True:
+            # Verifica se o tempo atual atingiu ou ultrapassou o tempo de ativação
+            if time.time() >= self.start_time:
+                if self.active:
+                    pyautogui.press('f15')
+                    logging.info("Tecla F15 pressionada.")
+                else:
+                    logging.info("AutoPresser desativado.")
+            else:
+                logging.info("Aguardando o tempo de ativação.")
+
+            # Aguarda o intervalo definido antes de verificar novamente
             time.sleep(self.interval)
 
-    def toggle_active(self):
-        self.active = not self.active
+    def toggle_active(self, active=None):
+        if active is not None:
+            self.active = active
         if self.active:
             logging.info("Ativando programa.")
-            self.thread = threading.Thread(target=self.press_key)
-            self.thread.daemon = True
-            self.thread.start()
+            if self.thread is None or not self.thread.is_alive():
+                self.thread = threading.Thread(target=self.press_key)
+                self.thread.daemon = True
+                self.thread.start()
         else:
             logging.info("Desativando programa.")
-            if self.thread.is_alive():
+            if self.thread is not None and self.thread.is_alive():
                 self.thread.join()
 
     def define_activation_time(self):
@@ -47,7 +72,7 @@ def configure_menu(auto_presser):
     menu = QMenu()
     menu.addAction("Tempo de Ativação").triggered.connect(auto_presser.define_activation_time)
     menu.addAction("Tempo de Uso").triggered.connect(auto_presser.define_usage_time)
-    menu.addAction("Alternar Estado").triggered.connect(auto_presser.toggle_active)
+    menu.addAction("Alternar Estado").triggered.connect(lambda: auto_presser.toggle_active(not auto_presser.active))
     menu.addAction("Sair").triggered.connect(sys.exit)
     return menu
 
@@ -67,8 +92,5 @@ if __name__ == "__main__":
 
     auto_presser = AutoPresser(interval=args.interval)
     app, tray_icon = initialize_app(auto_presser)
-
-    # Iniciar pressionamento de tecla imediatamente
-    auto_presser.toggle_active()
 
     sys.exit(app.exec_())
