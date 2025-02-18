@@ -1,3 +1,20 @@
+"""
+SuperAtivo - Automatizador de Atividade
+
+Este módulo implementa um sistema de automação para simular atividade do usuário
+através de movimentos do mouse e pressionamento de teclas em intervalos aleatórios.
+
+Features:
+- Interface gráfica com ícone na bandeja do sistema
+- Controle de tempo de execução
+- Movimentos aleatórios do mouse
+- Logging detalhado de atividades
+- Feedback em tempo real do status
+
+Author: Rodolfo Caldas Freitas
+Version: 2.0.0
+"""
+
 import time
 import threading
 import pyautogui
@@ -5,155 +22,247 @@ import sys
 import argparse
 import logging
 import random
+import os
+from dataclasses import dataclass
+from typing import Optional
 from PyQt5.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QInputDialog
-from PyQt5.QtGui import QIcon
+from PyQt5.QtCore import QTimer, Qt
+from PyQt5.QtGui import QIcon, QPixmap
 from logging.handlers import TimedRotatingFileHandler
 
-# Configuração do logger para registrar atividades em um arquivo de log
-handler = TimedRotatingFileHandler('activity_log.log', when='midnight', interval=1, backupCount=1)
-handler.setLevel(logging.INFO)
-formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-handler.setFormatter(formatter)
+# Configurações globais
+SCREEN_REFRESH_RATE = 1000  # ms
+MIN_INTERVAL = 180  # segundos
+MAX_INTERVAL = 240  # segundos
+LOG_FORMAT = '%(asctime)s - %(levelname)s - %(message)s'
 
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
-logger.addHandler(handler)
+@dataclass
+class ActivityStatus:
+    """Classe para armazenar o estado atual da atividade"""
+    message: str = ""
+    is_active: bool = False
+    last_update: float = time.time()
+    remaining_time: Optional[int] = None
 
 class AutoPresser:
-    """
-    Classe responsável por automatizar o pressionamento da tecla F15 em intervalos definidos.
-    Permite definir tempos de ativação e uso, além de ativar/desativar a automação.
-    """
+    def __init__(self, interval: int):
+        """Inicializa o AutoPresser com as configurações básicas"""
+        self.base_interval = interval
+        self.status = ActivityStatus()
+        self.thread: Optional[threading.Thread] = None
+        self.should_stop = False
+        self.usage_time = 0
+        self.usage_start_time = None
+        self._setup_logging()
+        self.toggle_active(True)
 
-    def __init__(self, interval):
-        """
-        Inicializa a classe AutoPresser.
+    def _setup_logging(self) -> None:
+        """Configura o sistema de logging"""
+        self.logger = logging.getLogger(__name__)
+        handler = TimedRotatingFileHandler(
+            'activity_log.log',
+            when='midnight',
+            interval=1,
+            backupCount=7
+        )
+        handler.setFormatter(logging.Formatter(LOG_FORMAT))
+        self.logger.addHandler(handler)
+        self.logger.setLevel(logging.INFO)
 
-        :param interval: Intervalo em segundos entre os pressionamentos da tecla.
-        """
-        self.base_interval = interval  # Intervalo base entre pressionamentos
-        self.active = True  # Estado da automação (ativa ou não)
-        self.thread = None  # Thread para o pressionamento da tecla
-        self.start_time = time.time()  # Tempo de início
-        self.usage_time = 0  # Tempo de uso definido
-        self.usage_start_time = None  # Tempo de início do uso
-        self.toggle_active(True)  # Ativa a automação ao iniciar
+    def _perform_activity(self) -> None:
+        """Executa as ações de movimento do mouse e tecla"""
+        try:
+            # Obtém dimensões da tela
+            screen_size = pyautogui.size()
+            
+            # Gera posições aleatórias dentro dos limites da tela
+            x = random.randint(0, screen_size.width)
+            y = random.randint(0, screen_size.height)
+            
+            # Executa ações
+            pyautogui.moveTo(x, y, duration=0.5)
+            pyautogui.press('f15')
+            
+            self.logger.info(f"Atividade realizada: Mouse ({x}, {y}) e tecla F15")
+        except Exception as e:
+            self.logger.error(f"Erro ao executar atividade: {str(e)}")
+            raise
 
-    def press_key(self):
-        """
-        Método que pressiona a tecla F15 em intervalos definidos enquanto a automação estiver ativa.
-        """
-        while True:
-            if self.active:
-                # Verifica se o tempo de uso foi atingido
-                if self.usage_start_time and (time.time() - self.usage_start_time >= self.usage_time):
-                    logging.info("Tempo de uso atingido. Desativando.")
-                    self.toggle_active(False)  # Desativa a automação
-                    break
+    def press_key(self) -> None:
+        """Loop principal de execução das atividades"""
+        while not self.should_stop:
+            if self.status.is_active:
+                try:
+                    current_time = time.time()
+                    
+                    # Verifica tempo de uso
+                    if self._check_usage_time(current_time):
+                        continue
 
-                # Simula um movimento do mouse para uma posição aleatória
-                x, y = random.randint(0, 1920), random.randint(0, 1080)  # Ajuste os limites conforme a resolução da tela
-                pyautogui.moveTo(x, y, duration=0.5)  # Move o mouse para a posição aleatória
-                logging.info(f"Mouse movido para a posição: ({x}, {y})")
-
-                # Pressiona a tecla F15
-                pyautogui.press('f15')  # Pressiona a tecla F15
-                logging.info("Tecla F15 pressionada.")
-
-                # Gera um intervalo aleatório entre 3 a 4 minutos (180 a 240 segundos)
-                random_interval = random.randint(180, 240)  # Intervalo aleatório entre 180 e 240 segundos
-                time.sleep(random_interval)  # Aguarda o intervalo definido
+                    # Executa ações
+                    self._perform_activity()
+                    
+                    # Intervalo aleatório
+                    interval = random.randint(MIN_INTERVAL, MAX_INTERVAL)
+                    self.update_status(
+                        f"Aguardando {interval/60:.1f} minutos até próxima atividade"
+                    )
+                    time.sleep(interval)
+                    
+                except Exception as e:
+                    self.logger.error(f"Erro durante execução: {str(e)}", exc_info=True)
+                    self.update_status(f"Erro: {str(e)}")
+                    time.sleep(5)
             else:
-                logging.info("AutoPresser desativado.")
-                time.sleep(1)  # Aguarda um segundo antes de verificar novamente
+                time.sleep(1)
 
-    def toggle_active(self, active=None):
-        """
-        Alterna o estado da automação entre ativo e inativo.
+    def _check_usage_time(self, current_time: float) -> bool:
+        """Verifica se o tempo de uso foi atingido"""
+        if self.usage_time > 0 and self.usage_start_time:
+            remaining = self.usage_time - (current_time - self.usage_start_time)
+            self.status.remaining_time = int(remaining)
+            
+            if remaining <= 0:
+                self.update_status("Tempo de uso finalizado")
+                self.status.is_active = False
+                return True
+                
+            if int(current_time - self.status.last_update) >= 60:
+                self.update_status(
+                    f"Em execução - Tempo restante: {int(remaining/60)} minutos"
+                )
+        return False
 
-        :param active: Se fornecido, define o estado da automação.
-        """
+    def update_status(self, message: str) -> None:
+        """Atualiza o status e propaga para a interface"""
+        self.status.message = message
+        self.status.last_update = time.time()
+        self.logger.info(message)
+        
+        if hasattr(self, 'tray_icon'):
+            self.tray_icon.setToolTip(message)
+
+    def toggle_active(self, active: Optional[bool] = None) -> None:
+        """Alterna o estado de ativação do programa"""
         if active is not None:
-            self.active = active  # Atualiza o estado da automação
-        if self.active:
-            logging.info("Ativando programa.")
+            self.status.is_active = active
+        else:
+            self.status.is_active = not self.status.is_active
+
+        if self.status.is_active:
+            self.update_status("Programa ativado - Iniciando atividades...")
             if self.thread is None or not self.thread.is_alive():
-                # Inicia uma nova thread para pressionar a tecla
+                self.should_stop = False
                 self.thread = threading.Thread(target=self.press_key)
-                self.thread.daemon = True  # Permite que a thread seja encerrada quando o programa principal terminar
+                self.thread.daemon = True
                 self.thread.start()
         else:
-            logging.info("Desativando programa.")
-            if self.thread is not None and self.thread.is_alive():
-                self.thread.join()  # Aguarda a thread terminar
+            self.update_status("Programa pausado")
 
-    def define_activation_time(self):
-        """
-        Define o tempo de ativação da automação através de um diálogo de entrada.
-        """
-        tempo_ativacao, ok = QInputDialog.getInt(None, "Tempo de Ativação", "Definir tempo de ativação (em segundos):", 59, 0)
-        if ok:
-            self.start_time = time.time() + tempo_ativacao  # Define o tempo de ativação
-            logging.info(f"Tempo de ativação definido para {tempo_ativacao} segundos.")
-
-    def define_usage_time(self):
-        """
-        Define o tempo de uso da automação através de um diálogo de entrada.
-        """
-        tempo_uso, ok = QInputDialog.getInt(None, "Tempo de Uso", "Definir tempo de uso (em segundos):", 0, 0)
-        if ok:
-            self.usage_time = tempo_uso  # Define o tempo de uso
-            self.usage_start_time = time.time()  # Marca o início do uso
-            logging.info(f"Tempo de uso definido para {tempo_uso} segundos.")
-
-    def update_menu(self, menu):
-        """
-        Atualiza o texto do item de menu que alterna o estado da automação.
-
-        :param menu: O menu da bandeja do sistema.
-        """
-        toggle_action = menu.actions()[2]  # O terceiro item do menu é o que alterna o estado
-        toggle_action.setText("Desativar" if self.active else "Ativar")  # Atualiza o texto do item de menu com base no estado atual
+    def define_usage_time(self) -> None:
+        """Define o tempo de uso do programa"""
+        tempo_uso, ok = QInputDialog.getInt(
+            None, 
+            "Tempo de Uso", 
+            "Definir tempo de uso (em minutos):",
+            30, 1, 1440  # Mínimo 1 minuto, máximo 24 horas
+        )
+        if ok and tempo_uso > 0:
+            self.usage_time = tempo_uso * 60  # Converte para segundos
+            self.usage_start_time = time.time()
+            if not self.status.is_active:
+                self.toggle_active(True)
+            self.update_status(f"Tempo de uso definido: {tempo_uso} minutos")
 
 def configure_menu(auto_presser):
     """
-    Configura o menu da bandeja do sistema para a aplicação.
-
-    :param auto_presser: Instância da classe AutoPresser.
-    :return: Menu configurado.
+    Configura o menu da bandeja do sistema.
+    
+    Args:
+        auto_presser: Instância do AutoPresser
+    
+    Returns:
+        QMenu: Menu configurado
     """
     menu = QMenu()
-    menu.addAction("Tempo de Ativação").triggered.connect(auto_presser.define_activation_time)  # Ação para definir o tempo de ativação
-    menu.addAction("Tempo de Uso").triggered.connect(auto_presser.define_usage_time)  # Ação para definir o tempo de uso
-    toggle_action = menu.addAction("Desativar" if auto_presser.active else "Ativar")  # Ação para ativar/desativar
-    toggle_action.triggered.connect(lambda: [auto_presser.toggle_active(not auto_presser.active), auto_presser.update_menu(menu)])  # Alterna o estado e atualiza o menu
-    menu.addAction("Sair").triggered.connect(sys.exit)  # Ação para sair da aplicação
-    return menu
+    
+    # Status atual com texto inicial correto
+    status_action = menu.addAction(f"Status: {auto_presser.status.message}")
+    status_action.setEnabled(False)
+    
+    menu.addSeparator()
+    
+    # Ações do menu com ícones
+    usage_action = menu.addAction("⏱️ Definir Tempo de Uso")
+    usage_action.triggered.connect(auto_presser.define_usage_time)
+    
+    toggle_action = menu.addAction("⏸️ Pausar" if auto_presser.status.is_active else "▶️ Iniciar")
+    
+    def toggle_handler():
+        auto_presser.toggle_active()
+        new_text = "⏸️ Pausar" if auto_presser.status.is_active else "▶️ Iniciar"
+        toggle_action.setText(new_text)
+    
+    toggle_action.triggered.connect(toggle_handler)
+    
+    menu.addSeparator()
+    exit_action = menu.addAction("🚪 Sair")
+    exit_action.triggered.connect(
+        lambda: [
+            auto_presser.update_status("Encerrando..."),
+            setattr(auto_presser, 'should_stop', True),
+            QApplication.quit()
+        ]
+    )
+    
+    # Armazena referências importantes no auto_presser
+    auto_presser.status_action = status_action
+    auto_presser.toggle_action = toggle_action
+    
+    return menu  # Retorna apenas o menu
 
-def initialize_app(auto_presser):
-    """
-    Inicializa a aplicação e a bandeja do sistema.
+def main():
+    """Função principal do programa"""
+    parser = argparse.ArgumentParser(
+        description="SuperAtivo - Automatizador de Atividade"
+    )
+    parser.add_argument(
+        "-i", "--interval",
+        type=int,
+        default=30,
+        help="Intervalo base entre ações (segundos)"
+    )
+    args = parser.parse_args()
 
-    :param auto_presser: Instância da classe AutoPresser.
-    :return: Aplicação e ícone da bandeja do sistema.
-    """
-    app = QApplication(sys.argv)  # Cria a aplicação Qt
-    tray_icon = QSystemTrayIcon(QIcon("active_icon.png"))  # Cria o ícone da bandeja do sistema
-    tray_icon.setVisible(True)  # Torna o ícone visível
-    menu = configure_menu(auto_presser)  # Configura o menu
-    tray_icon.setContextMenu(menu)  # Define o menu para o ícone da bandeja
-    logging.info("Aplicação inicializada.")  # Log de inicialização
-    return app, tray_icon
+    try:
+        auto_presser = AutoPresser(interval=args.interval)
+        app = QApplication(sys.argv)
+        
+        # Configura ícone
+        icon_path = "active_icon.png"
+        if not os.path.exists(icon_path):
+            pixmap = QPixmap(32, 32)
+            pixmap.fill(Qt.transparent)
+            icon = QIcon(pixmap)
+        else:
+            icon = QIcon(icon_path)
+        
+        tray_icon = QSystemTrayIcon(icon)
+        menu = configure_menu(auto_presser)  # Agora recebe apenas o menu
+        tray_icon.setContextMenu(menu)
+        tray_icon.setVisible(True)
+        auto_presser.tray_icon = tray_icon
+        
+        # Configura timer para atualização do status
+        timer = QTimer()
+        timer.timeout.connect(lambda: auto_presser.status_action.setText(f"Status: {auto_presser.status.message}"))
+        timer.start(1000)  # Atualiza a cada segundo
+        
+        sys.exit(app.exec_())
+    except Exception as e:
+        logging.error(f"Erro fatal: {str(e)}", exc_info=True)
+        sys.exit(1)
 
 if __name__ == "__main__":
-    # Configuração do logger para registrar atividades em um arquivo de log
-    logging.basicConfig(filename='activity_log.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-    parser = argparse.ArgumentParser()  # Cria o parser de argumentos
-    parser.add_argument("-i", "--interval", type=int, default=30, help="Intervalo entre pressionamentos de tecla")  # Argumento para intervalo
-    args = parser.parse_args()  # Analisa os argumentos
-
-    auto_presser = AutoPresser(interval=args.interval)  # Cria a instância do AutoPresser
-    app, tray_icon = initialize_app(auto_presser)  # Inicializa a aplicação
-
-    sys.exit(app.exec_())  # Executa a aplicação e aguarda a saída
+    main()
 # End of file
